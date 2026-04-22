@@ -1,0 +1,5 @@
+PyQt5
+pytesseract
+PyMuPDF
+indic-transliteration
+Pillow
