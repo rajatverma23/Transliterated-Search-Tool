@@ -38,7 +38,7 @@ git clone https://github.com/rajatverma23/Transliterated-Search-Tool.git
 cd Transliterated-Search Tool
 ```
 
-### 1.1 Optional : Set the path to your tessdata
+### 1.1 Set the path to your tessdata
 * On mac : `export TESSDATA_PREFIX=/opt/homebrew/share/tessdata`
 * On Ubuntu : `export TESSDATA_PREFIX=/usr/share/tessdata`
 * On Windows : `set TESSDATA_PREFIX=C:\Program Files\Tesseract-OCR\tessdata`
