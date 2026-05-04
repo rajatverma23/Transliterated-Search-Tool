@@ -3,3 +3,4 @@ pytesseract
 PyMuPDF
 indic-transliteration
 Pillow
+python-docx

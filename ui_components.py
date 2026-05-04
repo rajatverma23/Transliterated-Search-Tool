@@ -1,12 +1,14 @@
 import sys
 import json
 import os
+import docx
 from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                              QPushButton, QSplitter, QScrollArea, QLabel, 
                              QTextEdit, QFileDialog, QLineEdit, QCheckBox, 
-                             QMessageBox, QProgressDialog)
+                             QMessageBox, QInputDialog, QProgressBar)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from PyQt5.QtGui import QPixmap, QImage, QTextCursor, QTextDocument
+from PyQt5.QtPrintSupport import QPrinter
 
 from document_handler import DocumentHandler
 from ocr_engine import OCREngine
@@ -24,12 +26,12 @@ class OCRWorker(QThread):
         self.is_running = True
 
     def run(self):
-        total_pages = len(self.doc_handler.pages)
+        total_pages = self.doc_handler.num_pages
         for i in range(total_pages):
             if not self.is_running:
                 break
             img = self.doc_handler.get_page(i)
-            text = self.ocr_engine.process_image(img)
+            text = self.ocr_engine.process_image(img) if img else ""
             self.result.emit(i, text)
             self.progress.emit(i + 1)
         self.finished.emit()
@@ -46,8 +48,9 @@ class MainWindow(QMainWindow):
         self.doc_handler = DocumentHandler()
         self.ocr_engine = OCREngine()
         
-        self.page_labels = []
-        self.text_edits = []
+        self.page_texts = []
+        self.current_page = 0
+        self.total_pages = 0
         self.current_search_results = []
         self.current_search_index = -1
 
@@ -77,10 +80,20 @@ class MainWindow(QMainWindow):
         self.btn_ocr.clicked.connect(self.run_ocr)
         self.btn_ocr.setEnabled(False)
 
+        self.btn_save_text = QPushButton("Save Text")
+        self.btn_save_text.setMinimumWidth(100)
+        self.btn_save_text.clicked.connect(self.save_text)
+        self.btn_save_text.setEnabled(False)
+
+        self.btn_load_text = QPushButton("Load Text")
+        self.btn_load_text.setMinimumWidth(100)
+        self.btn_load_text.clicked.connect(self.load_text)
+        self.btn_load_text.setEnabled(False)
+
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("Search OCR Text (Use ITRANS for transliteration e.g. bhaarat)")
+        self.search_input.setPlaceholderText("Search OCR Text (Use ITRANS e.g. bhaarat)")
         
-        self.chk_transliterate = QCheckBox("Transliterate (to Devanagari)")
+        self.chk_transliterate = QCheckBox("Transliterate")
         self.chk_transliterate.setChecked(True)
 
         self.chk_fuzzy = QCheckBox("Fuzzy Search")
@@ -89,15 +102,17 @@ class MainWindow(QMainWindow):
         self.btn_search = QPushButton("Search")
         self.btn_search.clicked.connect(self.perform_search)
 
-        self.btn_prev = QPushButton("< Prev")
+        self.btn_prev = QPushButton("<")
         self.btn_prev.clicked.connect(self.search_prev)
 
-        self.btn_next = QPushButton("Next >")
+        self.btn_next = QPushButton(">")
         self.btn_next.clicked.connect(self.search_next)
 
         toolbar_layout.addWidget(self.btn_open)
         toolbar_layout.addWidget(self.btn_load_model)
         toolbar_layout.addWidget(self.btn_ocr)
+        toolbar_layout.addWidget(self.btn_save_text)
+        toolbar_layout.addWidget(self.btn_load_text)
         toolbar_layout.addSpacing(20)
         toolbar_layout.addWidget(self.search_input)
         toolbar_layout.addWidget(self.chk_transliterate)
@@ -105,6 +120,21 @@ class MainWindow(QMainWindow):
         toolbar_layout.addWidget(self.btn_search)
         toolbar_layout.addWidget(self.btn_prev)
         toolbar_layout.addWidget(self.btn_next)
+        
+        # ---- Navigation Toolbar ----
+        nav_layout = QHBoxLayout()
+        self.btn_page_prev = QPushButton("< Prev Page")
+        self.btn_page_prev.clicked.connect(lambda: self.navigate_to_page(self.current_page - 1))
+        self.lbl_page_info = QLabel("Page 0 / 0")
+        self.lbl_page_info.setAlignment(Qt.AlignCenter)
+        self.btn_page_next = QPushButton("Next Page >")
+        self.btn_page_next.clicked.connect(lambda: self.navigate_to_page(self.current_page + 1))
+        
+        nav_layout.addStretch()
+        nav_layout.addWidget(self.btn_page_prev)
+        nav_layout.addWidget(self.lbl_page_info)
+        nav_layout.addWidget(self.btn_page_next)
+        nav_layout.addStretch()
 
         # ---- Main Content Splitter ----
         self.splitter = QSplitter(Qt.Horizontal)
@@ -112,59 +142,27 @@ class MainWindow(QMainWindow):
         # Left Panel (Document)
         self.left_scroll = QScrollArea()
         self.left_scroll.setWidgetResizable(True)
-        self.left_widget = QWidget()
-        self.left_layout = QVBoxLayout(self.left_widget)
-        # Using AlignCenter for the layout so the placeholder is centered vertically and horizontally initially
-        self.left_layout.setAlignment(Qt.AlignCenter)
-
-        self.left_placeholder = QLabel("PDF Viewer Area")
-        self.left_placeholder.setAlignment(Qt.AlignCenter)
-        self.left_placeholder.setStyleSheet("color: gray; font-size: 24px;")
-        self.left_layout.addWidget(self.left_placeholder)
-
-        self.left_scroll.setWidget(self.left_widget)
+        self.image_label = QLabel("PDF Viewer Area")
+        self.image_label.setAlignment(Qt.AlignCenter)
+        self.left_scroll.setWidget(self.image_label)
 
         # Right Panel (OCR Text)
-        self.right_scroll = QScrollArea()
-        self.right_scroll.setWidgetResizable(True)
-        self.right_widget = QWidget()
-        self.right_layout = QVBoxLayout(self.right_widget)
-        self.right_layout.setAlignment(Qt.AlignCenter)
-
-        self.right_placeholder = QLabel("OCR Text Area")
-        self.right_placeholder.setAlignment(Qt.AlignCenter)
-        self.right_placeholder.setStyleSheet("color: gray; font-size: 24px;")
-        self.right_layout.addWidget(self.right_placeholder)
-
-        self.right_scroll.setWidget(self.right_widget)
+        self.text_edit = QTextEdit()
+        self.text_edit.setPlaceholderText("OCR Text Area")
 
         self.splitter.addWidget(self.left_scroll)
-        self.splitter.addWidget(self.right_scroll)
+        self.splitter.addWidget(self.text_edit)
         self.splitter.setSizes([600, 600])
 
         main_layout.addLayout(toolbar_layout)
+        main_layout.addLayout(nav_layout)
         main_layout.addWidget(self.splitter)
-
-        # Link scrollbars
-        self.left_scroll.verticalScrollBar().valueChanged.connect(self.sync_scroll_right)
-        self.right_scroll.verticalScrollBar().valueChanged.connect(self.sync_scroll_left)
-
-    def sync_scroll_right(self, value):
-        self.right_scroll.verticalScrollBar().setValue(value)
-
-    def sync_scroll_left(self, value):
-        self.left_scroll.verticalScrollBar().setValue(value)
-
-    def clear_panels(self):
-        for i in reversed(range(self.left_layout.count())): 
-            self.left_layout.itemAt(i).widget().setParent(None)
-        for i in reversed(range(self.right_layout.count())): 
-            self.right_layout.itemAt(i).widget().setParent(None)
         
-        self.page_labels.clear()
-        self.text_edits.clear()
-        self.current_search_results.clear()
-        self.current_search_index = -1
+        # Setup Status bar and Progress bar
+        self.statusBar()
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setVisible(False)
+        self.statusBar().addPermanentWidget(self.progress_bar, 1)
 
     def load_model(self):
         file_path, _ = QFileDialog.getOpenFileName(self, "Select Tesseract Model (.traineddata)", "", "Tesseract Model (*.traineddata)")
@@ -173,7 +171,6 @@ class MainWindow(QMainWindow):
             model_name = os.path.basename(file_path).split('.')[0]
             self.ocr_engine.set_config(lang=model_name, tessdata_dir=tessdata_dir)
             
-            # Save config
             config_data = {"lang": model_name, "tessdata_dir": tessdata_dir}
             try:
                 with open("config.json", "w") as f:
@@ -201,62 +198,95 @@ class MainWindow(QMainWindow):
     def open_file(self):
         file_path, _ = QFileDialog.getOpenFileName(self, "Open Document", "", "Supported Files (*.pdf *.png *.jpg *.jpeg *.bmp *.tiff)")
         if file_path:
-            self.clear_panels()
-            self.left_layout.setAlignment(Qt.AlignTop)
-            self.right_layout.setAlignment(Qt.AlignTop)
             try:
-                num_pages = self.doc_handler.load_document(file_path)
+                self.total_pages = self.doc_handler.load_document(file_path)
+                self.page_texts = [""] * self.total_pages
+                self.current_search_results.clear()
+                self.current_search_index = -1
                 
-                for i in range(num_pages):
-                    img = self.doc_handler.get_page(i)
-                    
-                    # Convert PIL to QPixmap
-                    data = img.tobytes("raw", "RGB")
-                    # Use .copy() to decouple QImage from the temporary python bytes object `data`
-                    bytes_per_line = 3 * img.size[0]
-                    qim = QImage(data, img.size[0], img.size[1], bytes_per_line, QImage.Format_RGB888).copy()
-                    pixmap = QPixmap.fromImage(qim)
-                    
-                    label = QLabel()
-                    # Scale down slightly to fit typical screen width (e.g. 500 px width)
-                    scaled_pixmap = pixmap.scaledToWidth(550, Qt.SmoothTransformation)
-                    label.setPixmap(scaled_pixmap)
-                    label.setAlignment(Qt.AlignCenter)
-                    self.page_labels.append(label)
-                    self.left_layout.addWidget(label)
-                    
-                    text_edit = QTextEdit()
-                    text_edit.setReadOnly(True)
-                    text_edit.setMinimumHeight(scaled_pixmap.height() + 10)
-                    text_edit.setPlaceholderText(f"Waiting for OCR (Page {i+1})...")
-                    self.text_edits.append(text_edit)
-                    self.right_layout.addWidget(text_edit)
-                    
                 self.btn_ocr.setEnabled(True)
+                self.btn_save_text.setEnabled(True)
+                self.btn_load_text.setEnabled(True)
+                
+                self.navigate_to_page(0)
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Failed to load document: {e}")
 
-    def run_ocr(self):
-        if not self.doc_handler.pages:
+    def navigate_to_page(self, index):
+        if self.total_pages == 0:
             return
+            
+        # Save current text from UI to memory
+        if 0 <= self.current_page < self.total_pages:
+            self.page_texts[self.current_page] = self.text_edit.toPlainText()
+            
+        if index < 0:
+            index = 0
+        elif index >= self.total_pages:
+            index = self.total_pages - 1
+            
+        self.current_page = index
+        self.lbl_page_info.setText(f"Page {self.current_page + 1} / {self.total_pages}")
+        
+        self.btn_page_prev.setEnabled(self.current_page > 0)
+        self.btn_page_next.setEnabled(self.current_page < self.total_pages - 1)
+        
+        # Load image
+        img = self.doc_handler.get_page(index)
+        if img:
+            data = img.tobytes("raw", "RGB")
+            bytes_per_line = 3 * img.size[0]
+            qim = QImage(data, img.size[0], img.size[1], bytes_per_line, QImage.Format_RGB888).copy()
+            pixmap = QPixmap.fromImage(qim)
+            scaled_pixmap = pixmap.scaledToWidth(550, Qt.SmoothTransformation)
+            self.image_label.setPixmap(scaled_pixmap)
+        else:
+            self.image_label.clear()
+            self.image_label.setText("Failed to load image")
+            
+        # Load text
+        self.text_edit.setPlainText(self.page_texts[self.current_page])
+
+    def run_ocr(self):
+        if self.total_pages == 0:
+            return
+
+        langs = self.ocr_engine.get_available_languages()
+        if not langs:
+            langs = ['eng']
+            
+        current_lang = self.ocr_engine.lang
+        try:
+            current_idx = langs.index(current_lang)
+        except ValueError:
+            current_idx = 0
+            if current_lang not in langs:
+                langs.insert(0, current_lang)
+
+        lang, ok = QInputDialog.getItem(self, "Select OCR Language", "Select language for OCR:", langs, current_idx, False)
+        if not ok or not lang:
+            return 
+
+        self.ocr_engine.set_config(lang=lang, tessdata_dir=self.ocr_engine.tessdata_dir)
 
         self.btn_ocr.setEnabled(False)
         self.btn_open.setEnabled(False)
         
-        self.progress_dialog = QProgressDialog("Running OCR...", "Cancel", 0, len(self.doc_handler.pages), self)
-        self.progress_dialog.setWindowTitle("Processing")
-        self.progress_dialog.setWindowModality(Qt.WindowModal)
-        self.progress_dialog.canceled.connect(self.cancel_ocr)
+        self.progress_bar.setRange(0, self.total_pages)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setVisible(True)
 
         self.worker = OCRWorker(self.doc_handler, self.ocr_engine)
-        self.worker.progress.connect(self.progress_dialog.setValue)
+        self.worker.progress.connect(self.progress_bar.setValue)
         self.worker.result.connect(self.update_ocr_text)
         self.worker.finished.connect(self.ocr_finished)
         self.worker.start()
 
     def update_ocr_text(self, index, text):
-        if 0 <= index < len(self.text_edits):
-            self.text_edits[index].setPlainText(text)
+        if 0 <= index < self.total_pages:
+            self.page_texts[index] = text
+            if index == self.current_page:
+                self.text_edit.setPlainText(text)
 
     def cancel_ocr(self):
         if self.worker:
@@ -265,22 +295,121 @@ class MainWindow(QMainWindow):
     def ocr_finished(self):
         self.btn_ocr.setEnabled(True)
         self.btn_open.setEnabled(True)
-        if hasattr(self, 'progress_dialog'):
-            self.progress_dialog.close()
+        self.progress_bar.setVisible(False)
+
+    def save_text(self):
+        if self.total_pages == 0:
+            QMessageBox.warning(self, "No Text", "There is no document to save.")
+            return
+            
+        # Ensure current page text is committed
+        self.page_texts[self.current_page] = self.text_edit.toPlainText()
+        
+        file_path, selected_filter = QFileDialog.getSaveFileName(
+            self, "Save OCR Text", "", "Text Files (*.txt);;Word Documents (*.docx);;PDF Files (*.pdf);;All Files (*)"
+        )
+        if file_path:
+            try:
+                if file_path.endswith('.docx') or "Word Document" in selected_filter:
+                    doc = docx.Document()
+                    for i, text in enumerate(self.page_texts):
+                        doc.add_heading(f'Page {i+1}', level=1)
+                        doc.add_paragraph(text)
+                    if not file_path.endswith('.docx'):
+                        file_path += '.docx'
+                    doc.save(file_path)
+                    QMessageBox.information(self, "Success", "Text saved successfully as DOCX.")
+                    
+                elif file_path.endswith('.pdf') or "PDF File" in selected_filter:
+                    printer = QPrinter(QPrinter.HighResolution)
+                    printer.setOutputFormat(QPrinter.PdfFormat)
+                    if not file_path.endswith('.pdf'):
+                        file_path += '.pdf'
+                    printer.setOutputFileName(file_path)
+                    
+                    doc = QTextDocument()
+                    html_content = ""
+                    for i, text in enumerate(self.page_texts):
+                        html_content += f"<h1>Page {i+1}</h1><pre style='font-family: monospace;'>{text}</pre><br>"
+                    doc.setHtml(html_content)
+                    doc.print_(printer)
+                    QMessageBox.information(self, "Success", "Text saved successfully as PDF.")
+                    
+                else:
+                    if not file_path.endswith('.txt') and "Text File" in selected_filter:
+                        file_path += '.txt'
+                    with open(file_path, "w", encoding="utf-8") as f:
+                        for i, text in enumerate(self.page_texts):
+                            f.write(f"--- Page {i+1} ---\n")
+                            f.write(text)
+                            f.write("\n\n")
+                    QMessageBox.information(self, "Success", "Text saved successfully as TXT.")
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to save text: {e}")
+
+    def load_text(self):
+        if self.total_pages == 0:
+            QMessageBox.warning(self, "No Document", "Please load a PDF or Image first.")
+            return
+
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Load OCR Text", "", "Text/Word Files (*.txt *.docx);;All Files (*)"
+        )
+        if not file_path:
+            return
+
+        try:
+            import re
+            texts = []
+            if file_path.endswith('.txt'):
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                    parts = re.split(r'^--- Page \d+ ---$', content, flags=re.MULTILINE)
+                    for part in parts[1:]:
+                        texts.append(part.strip())
+            elif file_path.endswith('.docx'):
+                doc = docx.Document(file_path)
+                current_page_text = []
+                for p in doc.paragraphs:
+                    if p.style.name.startswith('Heading') and p.text.startswith('Page '):
+                        if current_page_text:
+                            texts.append('\n'.join(current_page_text).strip())
+                            current_page_text = []
+                    else:
+                        current_page_text.append(p.text)
+                if current_page_text:
+                    texts.append('\n'.join(current_page_text).strip())
+            
+            if not texts:
+                QMessageBox.warning(self, "Warning", "Could not find any parsed pages in the file. Ensure it was saved by this tool.")
+                return
+
+            for i in range(min(self.total_pages, len(texts))):
+                self.page_texts[i] = texts[i]
+            
+            self.text_edit.setPlainText(self.page_texts[self.current_page])
+            QMessageBox.information(self, "Success", f"Loaded text for {len(texts)} pages.")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to load text: {e}")
 
     def perform_search(self):
+        if self.total_pages == 0:
+            return
+            
+        # commit current page text
+        self.page_texts[self.current_page] = self.text_edit.toPlainText()
+            
         self.current_search_results.clear()
         self.current_search_index = -1
         
-        # Clear previous highlights
-        for te in self.text_edits:
-            cursor = te.textCursor()
-            cursor.select(QTextCursor.Document)
-            fmt = cursor.charFormat()
-            fmt.setBackground(Qt.transparent)
-            cursor.setCharFormat(fmt)
-            cursor.clearSelection()
-            te.setTextCursor(cursor)
+        # remove highlighted text in active edit
+        cursor = self.text_edit.textCursor()
+        cursor.select(QTextCursor.Document)
+        fmt = cursor.charFormat()
+        fmt.setBackground(Qt.transparent)
+        cursor.setCharFormat(fmt)
+        cursor.clearSelection()
+        self.text_edit.setTextCursor(cursor)
             
         raw_query = self.search_input.text()
         if not raw_query.strip():
@@ -289,11 +418,8 @@ class MainWindow(QMainWindow):
         query = raw_query
         if self.chk_transliterate.isChecked():
             query = SearchUtil.transliterate_query(raw_query)
-            # Update search box to show the transliterated text? Or keep visual feedback.
-            # We will show the actual search term in the box
             self.search_input.setText(f"{raw_query} => {query}")
         else:
-            # If changed mind, strip => part
             if "=>" in raw_query:
                 query = raw_query.split("=>")[1].strip()
 
@@ -301,8 +427,7 @@ class MainWindow(QMainWindow):
 
         if self.chk_fuzzy.isChecked():
             trie = Trie()
-            for te in self.text_edits:
-                text = te.toPlainText()
+            for text in self.page_texts:
                 for token in text.split():
                     cleaned = token.strip('.,()[]{}"\'`~?!;:-\n\t')
                     if cleaned:
@@ -317,12 +442,12 @@ class MainWindow(QMainWindow):
             if fuzzy_matches:
                 words_to_search = fuzzy_matches
 
-        # Find all occurrences in all text edits
-        for i, te in enumerate(self.text_edits):
-            doc = te.document()
+        # Find occurrences across all page texts
+        for i, text in enumerate(self.page_texts):
+            doc = QTextDocument()
+            doc.setPlainText(text)
             for w in words_to_search:
                 cursor = QTextCursor(doc)
-                
                 while not cursor.isNull() and not cursor.atEnd():
                     if self.chk_fuzzy.isChecked():
                         cursor = doc.find(w, cursor)
@@ -330,14 +455,9 @@ class MainWindow(QMainWindow):
                         cursor = doc.find(w, cursor, QTextDocument.FindCaseSensitively)
                         
                     if not cursor.isNull():
-                        # Highlight
-                        fmt = cursor.charFormat()
-                        fmt.setBackground(Qt.yellow)
-                        cursor.setCharFormat(fmt)
-                        self.current_search_results.append((i, cursor))
+                        self.current_search_results.append((i, cursor.selectionStart(), cursor.selectionEnd()))
 
-        # Sort the results by page index and then by position within page
-        self.current_search_results.sort(key=lambda x: (x[0], x[1].position()))
+        self.current_search_results.sort(key=lambda x: (x[0], x[1]))
 
         if self.current_search_results:
             self.current_search_index = 0
@@ -349,14 +469,28 @@ class MainWindow(QMainWindow):
         if not self.current_search_results or self.current_search_index < 0:
             return
             
-        page_idx, cursor = self.current_search_results[self.current_search_index]
-        target_editor = self.text_edits[page_idx]
+        page_idx, start_pos, end_pos = self.current_search_results[self.current_search_index]
         
-        target_editor.setFocus()
-        target_editor.setTextCursor(cursor)
+        # navigate if needed
+        if self.current_page != page_idx:
+            self.navigate_to_page(page_idx)
+            
+        # highlight
+        cursor = self.text_edit.textCursor()
+        cursor.select(QTextCursor.Document)
+        fmt = cursor.charFormat()
+        fmt.setBackground(Qt.transparent)
+        cursor.setCharFormat(fmt)
         
-        # Scroll the right panel to the widget
-        self.right_scroll.ensureWidgetVisible(target_editor)
+        cursor.setPosition(start_pos)
+        cursor.setPosition(end_pos, QTextCursor.KeepAnchor)
+        
+        fmt = cursor.charFormat()
+        fmt.setBackground(Qt.yellow)
+        cursor.setCharFormat(fmt)
+        
+        self.text_edit.setTextCursor(cursor)
+        self.text_edit.setFocus()
 
     def search_next(self):
         if not self.current_search_results:

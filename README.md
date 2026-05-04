@@ -34,6 +34,11 @@ git clone https://github.com/rajatverma23/Transliterated-Search-Tool.git
 cd Transliterated-Search Tool
 ```
 
+### 1.1 Optional : Set the path to your tessdata
+* On mac : `export TESSDATA_PREFIX=/opt/homebrew/share/tessdata`
+* On Ubuntu : `export TESSDATA_PREFIX=/usr/share/tessdata`
+* On Windows : `set TESSDATA_PREFIX=C:\Program Files\Tesseract-OCR\tessdata`
+
 ### 2. Set up a virtual environment (Recommended)
 It is highly recommended to use a virtual environment to keep dependencies isolated:
 ```bash
