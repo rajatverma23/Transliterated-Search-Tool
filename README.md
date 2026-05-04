@@ -8,7 +8,11 @@ Our tool uniquely supports **Transliterated Search** (allowing you to type in IT
 
 ## 🌟 Features
 
-- **Document Viewer & OCR Panel:** Side-by-side view comparing original document pages with OCR-extracted text.
+- **Document Viewer & OCR Panel:** Side-by-side view comparing original document pages with OCR-extracted text. The OCR text is fully editable for manual corrections.
+- **Save & Export OCR Text:** Save the extracted and edited text to multiple formats, including `.txt`, `.docx` (Word Document), and `.pdf`.
+- **Load Existing OCR Text:** Resume your work by loading previously saved `.txt` or `.docx` OCR texts alongside your document without having to re-run OCR.
+- **Language Selection:** Dynamically select from available Tesseract languages on your system via a dialog box right before starting the OCR process.
+- **Large PDF Optimization & Background OCR:** Load and navigate massive PDFs effortlessly via a new pagination interface and lazy-loading. Run OCR entirely in the background, allowing you to freely view and edit already-processed pages without being blocked!
 - **Custom OCR Modeling:** Load `.traineddata` Tesseract models to perform highly accurate OCR tailored for your use cases.
 - **Transliteration (ITRANS to Devanagari):** Instead of needing a native Devanagari keyboard, simply type `bhaarat` in English, and the tool intelligently searches for `भारत`.
 - **Fuzzy Search:** Built-in Levenshtein distance and Trie implementation intelligently match search terms even if the OCR result contains minor spelling errors.
